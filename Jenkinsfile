@@ -24,7 +24,7 @@ pipeline {
 
         stage('Push to registry') {
             steps {
-                withDockerRegistry([ credentialsId: "dockerhub", url: "" ]) {
+                withDockerRegistry([ credentialsId: "1", url: "" ]) {
                     sh "docker push ${REGISTRY_IMAGE}:latest"
                     sh "docker push ${REGISTRY_IMAGE}:${BUILD_NUMBER}"
                 }
