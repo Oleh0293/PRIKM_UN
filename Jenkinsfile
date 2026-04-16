@@ -39,6 +39,14 @@ pipeline {
                 echo 'Stopping previous deployment if exists...'
                 sh 'docker stop prod_nginx 2>/dev/null || true'
                 sh 'docker rm prod_nginx 2>/dev/null || true'
+                sh '''
+                    PORT_CONTAINER=$(docker ps -q --filter "publish=80" 2>/dev/null)
+                    if [ -n "$PORT_CONTAINER" ]; then
+                        echo "Killing container occupying port 80: $PORT_CONTAINER"
+                        docker stop $PORT_CONTAINER 2>/dev/null || true
+                        docker rm $PORT_CONTAINER 2>/dev/null || true
+                    fi
+                '''
             }
         }
 
@@ -67,6 +75,7 @@ pipeline {
             echo 'Pipeline FAILED — check the logs above'
             sh 'docker stop prod_nginx 2>/dev/null || true'
             sh 'docker rm prod_nginx 2>/dev/null || true'
+            sh 'docker ps -q --filter "publish=80" | xargs -r docker rm -f 2>/dev/null || true'
         }
     }
 }
