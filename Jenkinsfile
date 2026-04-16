@@ -2,74 +2,48 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = 'nginx/custom'
-        IMAGE_TAG  = 'latest'
-        APP_PORT   = '80'
+        DOCKERHUB_USER = 'dante0293'
+        IMAGE_NAME     = 'prikm'
+        REGISTRY_IMAGE = "${DOCKERHUB_USER}/${IMAGE_NAME}"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Start') {
             steps {
-                echo "Branch: ${env.BRANCH_NAME ?: 'Lab_1'}"
-                echo "Build:  #${env.BUILD_NUMBER}"
-                checkout scm
+                echo 'Lab_2: started by GitHub'
             }
         }
 
-        stage('Build') {
+        stage('Image build') {
             steps {
-                echo "Building ${IMAGE_NAME}:${IMAGE_TAG}"
-                sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                sh "docker build -t ${IMAGE_NAME}:latest ."
+                sh "docker tag ${IMAGE_NAME} ${REGISTRY_IMAGE}:latest"
+                sh "docker tag ${IMAGE_NAME} ${REGISTRY_IMAGE}:${BUILD_NUMBER}"
             }
         }
 
-        stage('Test') {
+        stage('Push to registry') {
             steps {
-                echo 'Running container health check...'
-                sh "docker run --rm -d --name test_nginx -p 8888:80 ${IMAGE_NAME}:${IMAGE_TAG}"
-                sh 'sleep 3'
-                sh 'curl -f http://localhost:8888 || (docker stop test_nginx && exit 1)'
-                sh 'docker stop test_nginx'
-                echo 'Health check passed'
+                withDockerRegistry([ credentialsId: "dockerhub", url: "" ]) {
+                    sh "docker push ${REGISTRY_IMAGE}:latest"
+                    sh "docker push ${REGISTRY_IMAGE}:${BUILD_NUMBER}"
+                }
             }
         }
 
-        stage('Cleanup') {
+        stage('Deploy image') {
             steps {
-                echo 'Stopping previous deployment if exists...'
                 sh 'docker stop prod_nginx 2>/dev/null || true'
                 sh 'docker rm prod_nginx 2>/dev/null || true'
-                sh '''
-                    PORT_CONTAINER=$(docker ps -q --filter "publish=80" 2>/dev/null)
-                    if [ -n "$PORT_CONTAINER" ]; then
-                        echo "Killing container occupying port 80: $PORT_CONTAINER"
-                        docker stop $PORT_CONTAINER 2>/dev/null || true
-                        docker rm $PORT_CONTAINER 2>/dev/null || true
-                    fi
-                '''
-            }
-        }
-
-        stage('Deploy') {
-            steps {
-                echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} on port ${APP_PORT}"
-                sh "docker run -d --name prod_nginx -p ${APP_PORT}:80 ${IMAGE_NAME}:${IMAGE_TAG}"
-            }
-        }
-
-        stage('Verify') {
-            steps {
-                echo 'Verifying deployment...'
-                sh 'sleep 3'
-                sh "curl -f http://localhost:${APP_PORT}"
-                echo 'Deployment verified — site is live!'
+                sh 'docker ps -q --filter "publish=80" | xargs -r docker rm -f 2>/dev/null || true'
+                sh "docker run -d --name prod_nginx -p 80:80 ${REGISTRY_IMAGE}:latest"
             }
         }
     }
 
     post {
         success {
-            echo "Pipeline SUCCESS — ${IMAGE_NAME}:${IMAGE_TAG} is running on port ${APP_PORT}"
+            echo "Pipeline SUCCESS — ${REGISTRY_IMAGE}:${BUILD_NUMBER} deployed"
         }
         failure {
             echo 'Pipeline FAILED — check the logs above'
