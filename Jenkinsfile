@@ -137,7 +137,7 @@ pipeline {
                         allowMissing: false
                     ])
                     addBadge(icon: 'completed.gif', text: "${params.DEPLOY_ENV} - ${IMAGE_TAG}")
-                    addShortText(text: "${params.DEPLOY_ENV}", background: '#4caf50', color: '#fff', border: 0)
+                    addInfoBadge(text: "Deployed to ${params.DEPLOY_ENV}")
                 }
             }
         }
