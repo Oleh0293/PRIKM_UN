@@ -1,5 +1,5 @@
 - name: Deploy Containerized App
-  hosts: servers
+  hosts: all
   become: yes
   tasks:
     - name: Check if Docker is installed
