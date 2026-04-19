@@ -1,0 +1,33 @@
+- name: Deploy Containerized App
+  hosts: servers
+  become: yes
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Run Application Container
+      community.docker.docker_container:
+        name: my-app
+        image: nginx:latest
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "8091:80"
+
+    - name: Run Custom App from Docker Hub
+      community.docker.docker_container:
+        name: my-custom-app
+        image: dante0293/prikm:latest
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "8093:80"
