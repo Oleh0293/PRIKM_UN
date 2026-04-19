@@ -2,11 +2,18 @@
   hosts: servers
   become: yes
   tasks:
-    - name: Install Docker
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Install Docker (if not present)
       apt:
         name: docker.io
         state: present
         update_cache: yes
+      when: docker_check.rc != 0
 
     - name: Start Docker service
       service:
