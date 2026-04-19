@@ -1,0 +1,95 @@
+pipeline {
+    agent any
+
+    environment {
+        TF_IN_AUTOMATION = 'true'
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo 'Stage 1: Checking out source code from Git...'
+                checkout scm
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                echo 'Stage 2: Initializing Terraform...'
+                dir('lab7') {
+                    sh 'terraform init -input=false'
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                echo 'Stage 3: Planning infrastructure changes...'
+                dir('lab7') {
+                    sh 'terraform plan -out=tfplan -input=false'
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                echo 'Stage 4: Applying infrastructure changes...'
+                dir('lab7') {
+                    sh 'terraform apply -auto-approve -input=false tfplan'
+                    sh 'terraform output -raw server_ip > server_ip.txt'
+                    sh 'terraform output -raw server_port > server_port.txt'
+                }
+            }
+        }
+
+        stage('Ansible Deploy') {
+            steps {
+                echo 'Stage 5: Configuring and deploying application with Ansible...'
+                dir('lab7') {
+                    script {
+                        def serverIp = readFile('server_ip.txt').trim()
+                        def serverPort = readFile('server_port.txt').trim()
+                        echo "Deploying to ${serverIp}:${serverPort}"
+
+                        sh """
+                            ansible-playbook playbook.yml \
+                                -i "${serverIp}," \
+                                -e "ansible_connection=local" \
+                                --become
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Verify') {
+            steps {
+                echo 'Stage 6: Verifying deployment...'
+                dir('lab7') {
+                    script {
+                        def serverPort = readFile('server_port.txt').trim()
+                        sh "curl -f http://localhost:${serverPort}"
+                        sh "curl -f http://localhost:8096"
+                        echo 'Deployment verified successfully!'
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo 'Pipeline FAILED — destroying infrastructure...'
+            dir('lab7') {
+                sh 'terraform destroy -auto-approve || true'
+            }
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        always {
+            echo 'Pipeline finished.'
+        }
+    }
+}

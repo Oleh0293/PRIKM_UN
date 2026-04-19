@@ -1,0 +1,45 @@
+- name: Deploy Containerized App
+  hosts: servers
+  become: yes
+  tasks:
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Install Docker (if not present)
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+      when: docker_check.rc != 0
+
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Pull application image
+      community.docker.docker_image:
+        name: dante0293/prikm:latest
+        source: pull
+
+    - name: Run Application Container
+      community.docker.docker_container:
+        name: lab7-app
+        image: dante0293/prikm:latest
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "8096:80"
+
+    - name: Verify application is running
+      uri:
+        url: "http://localhost:8096"
+        status_code: 200
+      register: result
+      retries: 3
+      delay: 5
+      until: result.status == 200
