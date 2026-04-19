@@ -1,25 +1,15 @@
 - name: Deploy Containerized App
   hosts: all
-  become: yes
+  gather_facts: false
   tasks:
-    - name: Check if Docker is installed
+    - name: Check Docker is available
       command: docker --version
       register: docker_check
       changed_when: false
-      ignore_errors: true
 
-    - name: Install Docker (if not present)
-      apt:
-        name: docker.io
-        state: present
-        update_cache: yes
-      when: docker_check.rc != 0
-
-    - name: Start Docker service
-      service:
-        name: docker
-        state: started
-        enabled: yes
+    - name: Display Docker version
+      debug:
+        msg: "{{ docker_check.stdout }}"
 
     - name: Pull application image
       community.docker.docker_image:

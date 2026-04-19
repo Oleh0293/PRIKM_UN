@@ -55,8 +55,7 @@ pipeline {
                         sh """
                             ansible-playbook playbook.yml \
                                 -i "${serverIp}," \
-                                -e "ansible_connection=local" \
-                                --become
+                                -e "ansible_connection=local"
                         """
                     }
                 }
