@@ -1,0 +1,126 @@
+/**
+ * Курсова робота — Jenkins Pipeline (Pipeline as Code).
+ *
+ * Реалізує наскрізний DevOps-конвеєр для застосунку TaskTracker:
+ *   1) Checkout         — отримання коду
+ *   2) Build & Unit Test — збірка Docker-образу та модульний тест
+ *   3) Push to Registry  — публікація у Docker Hub (skip за параметром)
+ *   4) Terraform Apply   — провізіонінг ізольованої інфраструктури
+ *   5) Ansible Deploy    — розгортання моніторингу та reverse-proxy
+ *   6) Smoke Test        — перевірка ендпоінтів
+ *   7) Post-deploy load  — наповнення метрик трафіком
+ *
+ * У разі помилки виконується автоматичний terraform destroy.
+ */
+pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'TARGET_COLOR', choices: ['blue', 'green'],
+               description: 'Активний слот після успішного розгортання')
+        booleanParam(name: 'SKIP_PUSH', defaultValue: true,
+                     description: 'Не публікувати образ у Docker Hub')
+        string(name: 'IMAGE_TAG', defaultValue: '',
+               description: 'Custom tag (порожньо => BUILD_NUMBER)')
+    }
+
+    environment {
+        DOCKERHUB_USER  = 'dante0293'
+        IMAGE_NAME      = 'tasktracker'
+        IMAGE_TAG_EFF   = "${params.IMAGE_TAG ?: env.BUILD_NUMBER}"
+        REGISTRY_IMAGE  = "${DOCKERHUB_USER}/tasktracker"
+        TF_IN_AUTOMATION         = 'true'
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
+    }
+
+    options {
+        ansiColor('xterm')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                sh 'rm -rf coursework_demo && cp -r /home/vagrant/coursework_demo .'
+                echo "Build #${env.BUILD_NUMBER}, target=${params.TARGET_COLOR}, tag=${env.IMAGE_TAG_EFF}"
+            }
+        }
+
+        stage('Build & Unit Test') {
+            steps {
+                dir('coursework_demo/app') {
+                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG_EFF} ."
+                    sh "docker tag ${IMAGE_NAME}:${IMAGE_TAG_EFF} ${IMAGE_NAME}:local"
+                }
+                sh 'docker run --rm -d --name tt-uti -p 15000:5000 -e DB_HOST=__none__ tasktracker:local'
+                sh 'for i in 1 2 3 4 5; do sleep 2; curl -fs http://localhost:15000/version && break; done'
+                sh 'curl -fs http://localhost:15000/version'
+                sh 'docker stop tt-uti || true'
+            }
+        }
+
+        stage('Push to Registry') {
+            when { expression { return !params.SKIP_PUSH } }
+            steps {
+                sh "docker tag ${IMAGE_NAME}:${IMAGE_TAG_EFF} ${REGISTRY_IMAGE}:${IMAGE_TAG_EFF}"
+                sh "docker push ${REGISTRY_IMAGE}:${IMAGE_TAG_EFF}"
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir('coursework_demo/terraform') {
+                    sh 'terraform init -input=false'
+                    sh "terraform apply -auto-approve -input=false -var=app_image=${IMAGE_NAME}:local -var=active_color=${params.TARGET_COLOR}"
+                    script {
+                        env.ACTIVE_URL = sh(returnStdout: true, script: 'terraform output -raw active_url').trim()
+                        env.NODE_EXPORTER_TARGET = sh(returnStdout: true, script: 'terraform output -raw node_exporter_target').trim()
+                    }
+                    sh 'terraform output -raw ansible_inventory > ../ansible/inventory.ini'
+                }
+            }
+        }
+
+        stage('Ansible Deploy') {
+            steps {
+                dir('coursework_demo/ansible') {
+                    sh "ansible-playbook playbook.yml -i inventory.ini -e active_color=${params.TARGET_COLOR} -e node_exporter_target=${env.NODE_EXPORTER_TARGET}"
+                }
+            }
+        }
+
+        stage('Smoke Test') {
+            steps {
+                sh 'sleep 4'
+                sh 'curl -fs http://localhost:8090/health'
+                sh 'curl -fs http://localhost:8090/color'
+                sh 'curl -fs http://localhost:9099/-/ready'
+                sh 'curl -fs http://localhost:3010/api/health'
+            }
+        }
+
+        stage('Post-deploy load') {
+            steps {
+                sh '''
+                    for i in $(seq 1 60); do
+                      curl -fs -X POST -H "Content-Type: application/json" \
+                           -d "{\\"title\\": \\"task-pipeline-$i\\"}" \
+                           http://localhost:8090/api/tasks >/dev/null || true
+                      curl -fs http://localhost:8090/api/tasks >/dev/null || true
+                    done
+                '''
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo 'Pipeline FAILED — rolling back via terraform destroy'
+            dir('coursework_demo/terraform') {
+                sh 'terraform destroy -auto-approve || true'
+            }
+        }
+        success {
+            echo "✔ Active slot = ${params.TARGET_COLOR}; URL = ${env.ACTIVE_URL}"
+        }
+    }
+}

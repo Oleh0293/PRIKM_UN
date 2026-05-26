@@ -1,0 +1,124 @@
+---
+- name: Deploy CW Monitoring Stack (Prometheus + Grafana) and Reverse Proxy
+  hosts: all
+  gather_facts: false
+  vars:
+    node_exporter_target: "node-exporter:9100"
+    blue_target:          "app-blue:5000"
+    green_target:         "app-green:5000"
+    active_color:         "blue"
+
+  tasks:
+
+    # ── Prometheus ────────────────────────────────────────────────────
+    - name: Render Prometheus config from template
+      ansible.builtin.template:
+        src: templates/prometheus.yml.j2
+        dest: /tmp/cw-prometheus.yml
+        mode: "0644"
+
+    - name: Deploy Prometheus container
+      community.docker.docker_container:
+        name: cw-prometheus
+        image: prom/prometheus:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: cw-network
+        ports:
+          - "9099:9090"
+        volumes:
+          - /tmp/cw-prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+    # ── Grafana ───────────────────────────────────────────────────────
+    - name: Render Grafana datasource
+      ansible.builtin.template:
+        src: templates/datasource.yml.j2
+        dest: /tmp/cw-grafana-datasource.yml
+        mode: "0644"
+
+    - name: Render Grafana dashboard provisioning
+      ansible.builtin.copy:
+        dest: /tmp/cw-grafana-dashboards.yml
+        mode: "0644"
+        content: |
+          apiVersion: 1
+          providers:
+            - name: 'CW'
+              folder: ''
+              type: file
+              options:
+                path: /var/lib/grafana/dashboards
+
+    - name: Render Grafana dashboard JSON
+      ansible.builtin.copy:
+        dest: /tmp/cw-tasktracker-dashboard.json
+        mode: "0644"
+        content: "{{ lookup('file', 'templates/tasktracker-dashboard.json') }}"
+
+    - name: Deploy Grafana container
+      community.docker.docker_container:
+        name: cw-grafana
+        image: grafana/grafana:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: cw-network
+        ports:
+          - "3010:3000"
+        env:
+          GF_SECURITY_ADMIN_USER: "admin"
+          GF_SECURITY_ADMIN_PASSWORD: "admin123"
+          GF_USERS_ALLOW_SIGN_UP: "false"
+        volumes:
+          - /tmp/cw-grafana-datasource.yml:/etc/grafana/provisioning/datasources/cw.yml:ro
+          - /tmp/cw-grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/cw.yml:ro
+          - /tmp/cw-tasktracker-dashboard.json:/var/lib/grafana/dashboards/tasktracker.json:ro
+
+    # ── Reverse proxy (active color router) ──────────────────────────
+    - name: Render NGINX config (active slot = {{ active_color }})
+      ansible.builtin.template:
+        src: templates/proxy.conf.j2
+        dest: /tmp/cw-proxy.conf
+        mode: "0644"
+
+    - name: Deploy NGINX router container
+      community.docker.docker_container:
+        name: cw-proxy
+        image: nginx:1.27-alpine
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: cw-network
+        ports:
+          - "8090:80"
+        volumes:
+          - /tmp/cw-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+
+    # ── Перевірки готовності ──────────────────────────────────────────
+    - name: Wait for Prometheus
+      ansible.builtin.uri:
+        url: "http://localhost:9099/-/ready"
+        status_code: 200
+      retries: 10
+      delay: 3
+      register: prom_ready
+      until: prom_ready.status == 200
+
+    - name: Wait for Grafana
+      ansible.builtin.uri:
+        url: "http://localhost:3010/api/health"
+        status_code: 200
+      retries: 10
+      delay: 3
+      register: graf_ready
+      until: graf_ready.status == 200
+
+    - name: Wait for active TaskTracker via proxy
+      ansible.builtin.uri:
+        url: "http://localhost:8090/health"
+        status_code: 200
+      retries: 15
+      delay: 3
+      register: app_ready
+      until: app_ready.status == 200
